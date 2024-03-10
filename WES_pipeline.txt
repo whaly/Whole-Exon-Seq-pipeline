@@ -1,0 +1,147 @@
+# author: Jingyu Wang
+# time: 03/10/2024
+
+
+
+
+# Fastq file quality control
+fastqc -t 12 -o ./ ${sample}_1.fq ${sample}_2.fq 
+
+# Index reference genome
+bwa index -a bwtsw ${reference}.fasta > ${reference}.ann + ${reference}.amb + ${reference}.bwt + ${reference}.pac + ${reference}.sa
+
+# Align fastq to genome and get bam file
+bwa mem -M -R '@RG\tID:GroupID\tSM:SampleID\tPL:illumina\tLB:libraryID' ${reference}.fasta ${sample}_1.fq ${sample}_2.fq > aligned.bam
+
+# Sort bam file
+samtools sort -@ 10 -o aligned_sorted.bam -O aligned.bam
+
+# Mark duplicates
+gatk MarkDuplicates \
+	-I aligned_sorted.bam \
+	-O aligned_sorted_markdup.bam \
+	-M marked_dup_metrics.txt
+
+# Detect systematic errors in base quality score
+gatk BaseRecalibrator \
+	-R ${reference}.fasta \
+	-I aligned_sorted_markdup.bam \
+	-knownSites dbsnp.vcf \
+	-knownSites Mills_and_1000G_gold_standard.InDels.vcf \
+	-knownSites 1000G_phase1.InDels.vcf \
+	-O recal.table
+
+# Index bam file
+samtools index aligned_sorted_markdup.bam
+
+# Recalibrate base quality Sscore
+gatk ApplyBQSR \
+	-R ${reference}.fasta \
+	-I aligned_sorted_markdup.bam \
+	-L exon.bed \
+	-bqsr recal_data.table \
+	-O aligned_sorted_markdup_bqsr.bam
+
+# Bam file quality control
+qualimap bamqc -bam aligned_sorted_markdup_bqsr.bam -outformat PDF:HTML -outdir ./ -nt 12 --java-mem-size=10G
+
+(The processing pipline of the matched blood normal file is the same as above)
+
+# Call somatic mutation with matched blood normal file
+gatk Mutect2 \
+	-R ${reference}.fasta \
+	-I aligned_sorted_markdup_bqsr_bl.bam \
+	-I aligned_sorted_markdup_bqsr.bam \
+	-normal ${sample_bl} \
+	-tumor ${sample} \
+	-L exon.bed \
+	--germline-resource af-only-gnomad.vcf \
+	--panel-of-normals 1000g_pon.vcf \
+	-O somatic.vcf
+
+# Call somatic mutation without matched blood normal file
+gatk Mutect2 \
+	-R ${reference}.fasta \
+	-I aligned_sorted_markdup_bqsr.bam \
+	-tumor ${sample} \
+	-pon 1000g_pon.vcf \
+	--germline-resource af-only-gnomad.vcf \
+	-L exon.bed \
+	-O somatic_unmatched.vcf
+
+# Filter the mutation we detect and only keep those whose "Filter" tag is "PASS"
+gatk FilterMutectCalls \
+	-R ${reference}.fasta \
+	-V somatic.vcf \
+	-O somatic_filtered.vcf
+
+# Transfer vcf file to maf file
+gatk Funcotator \
+	-R ${reference}.fasta \
+	-V somatic_filtered.vcf \
+	--output-file-format MAF \
+	--ref-version hg38/hg19 \
+	--data-sources-path funcotator_dataSources.${version} \
+	-O somatic.maf
+
+# Visualization SNP via maftools 
+{R}
+library(maftools)
+laml_1 <- read.maf(maf="somatic_1.maf")
+laml_2 <- read.maf(maf="somatic_2.maf")
+laml_3 <- read.maf(maf="somatic_3.maf")
+laml_4 <- read.maf(maf="somatic_4.maf")
+mafs$M1 <- laml_1
+mafs$M2 <- laml_2
+mafs$M3 <- laml_3
+mafs$M4 <- laml_4
+multi_mafs <- merge_mafs(mafs, verbose = TRUE)
+pdf("multi_mafs_sum.pdf", width=7,height=7)
+plotmafSummary(maf = multi_mafs, rmOutlier = TRUE, addStat = 'median', dashboard = TRUE, titvRaw = FALSE)
+dev.off()
+
+# Facets
+cnv_facets.R \
+	-t aligned_sorted_markdup_bqsr.bam \
+	-n aligned_sorted_markdup_bqsr_bl.bam \
+	-vcf somatic.vcf \
+	-o ./ \
+	--gbuild hg38/hg19 \
+	--targets exon.bed
+
+# Sequenza
+sequenza-utils bam2seqz \
+	-n aligned_sorted_markdup_bqsr_bl.bam \
+	-t aligned_sorted_markdup_bqsr.bam \
+	--fasta ${reference}.fasta \
+	-gc hg38.gc50Base.wig.gz \
+	-o sample.seqz.gz
+
+sequenza-utils seqz_binning \
+	--seqz sample.seqz.gz \
+	-w 50 \
+	-o small.seqz.gz
+
+{R}
+library(sequenza)
+test <- sequenza.extract("small.seqz.gz", verbose = T, chromosome.list=c(paste0("chr", c(1:22, "X", "Y"))))
+CP <- sequenza.fit(test)
+sequenza.results(sequenza.extract = test,  cp.table = CP, sample.id = "${sample}",  out.dir="sequenza")
+
+# Cnvkit
+cnvkit.py batch \
+	aligned_sorted_markdup_bqsr.bam \
+	--normal aligned_sorted_markdup_bqsr_bl.bam \
+	--targets exon.bed \
+	--fasta ${reference}.fasta \
+	--access access.bed \
+	--output-reference my_reference.cnn \
+	--output-dir . \
+	--diagram --scatter
+
+# Plot multiple heatmap on one figure
+cnvkit.py heatmap *.cns
+
+# Gistic2
+I recommend you do this online.
+The Official website is GenePattern and after logging in you should click run -> Public Server -> Browse Modules -> All Modules -> GISTIC_2.0 and upload your files to run the job.

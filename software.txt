@@ -1,0 +1,24 @@
+# author: Jingyu Wang
+# time: 03/10/2024
+
+
+
+1. fastqc: https://www.bioinformatics.babraham.ac.uk/projects/fastqc/
+
+2. bwa: https://bio-bwa.sourceforge.net/
+
+3. samtools: https://www.htslib.org/
+
+4. gatk: https://gatk.broadinstitute.org/hc/en-us
+
+5. qualimap: http://qualimap.conesalab.org/
+
+6. maftools: https://github.com/PoisonAlien/maftools
+
+7. cnv_facets: https://github.com/dariober/cnv_facets
+
+8. sequenza: https://github.com/oicr-gsi/sequenza
+
+9. cnvkit: https://cnvkit.readthedocs.io/en/stable/
+
+10. gistic2: https://www.genepattern.org
